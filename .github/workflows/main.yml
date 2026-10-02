@@ -1,0 +1,106 @@
+name: Batch Video Compression (Windows + Custom FFmpeg.exe)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      ffmpeg_url:
+        description: 'URL Direct Download ffmpeg.exe Custom Kamu'
+        required: false
+
+env:
+  # ⚠️ GANTI LINK DI BAWAH INI DENGAN LINK RELEASE FFMPEG.EXE MILIKMU ⚠️
+  DEFAULT_FFMPEG_URL: 'https://github.com/scottluxe256-hub/compressions/releases/download/9.0.1/ffmpeg.exe'
+
+jobs:
+  batch-compress-windows:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python & Install gdown
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install gdown
+        run: pip install gdown
+
+      # Langkah ini sudah aman untuk 'push' maupun 'workflow_dispatch'
+      - name: Download Custom ffmpeg.exe
+        run: |
+          URL="${{ github.event.inputs.ffmpeg_url }}"
+          if [ -z "$URL" ]; then
+            URL="${{ env.DEFAULT_FFMPEG_URL }}"
+          fi
+
+          echo "Mengunduh ffmpeg.exe kustom dari: $URL"
+          curl -L "$URL" -o ffmpeg.exe
+
+      - name: Restore Cache Folder Compressed Videos
+        uses: actions/cache@v4
+        with:
+          path: compressed_videos
+          key: video-cache-${{ runner.os }}-${{ hashFiles('raw_videos/**') }}
+          restore-keys: |
+            video-cache-${{ runner.os }}-
+
+      - name: Download Folder dari Google Drive
+        run: |
+          echo "Mengunduh semua video dari folder Google Drive..."
+          gdown --folder "https://drive.google.com/drive/folders/1MpVVW_F1c2RLycd81gFOvQfUzMbNhBsE" -O raw_videos/
+
+      - name: Proses Kompresi Batch dengan ffmpeg.exe Custom
+        run: |
+          mkdir -p compressed_videos
+
+          echo "=== Struktur Folder Hasil Download raw_videos ==="
+          find raw_videos -type f
+
+          find raw_videos -type f \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.m4v" -o -iname "*.mkv" -o -iname "*.avi" \) | tr -d '\r' | while read -r input_path; do
+            filename=$(basename "$input_path")
+            output_path="compressed_videos/${filename%.*}_H264.mp4"
+
+            echo "=================================================="
+            echo "Memproses Video: $filename"
+            echo "Path Asli: $input_path"
+            echo "=================================================="
+
+            if [ -f "$output_path" ]; then
+              echo "⏩ SKIPPED: $filename sudah ada di Cache!"
+              continue
+            fi
+
+            ./ffmpeg.exe -nostdin -i "$input_path" \
+              -c:v libx264 -preset slower -crf 24 -r 60 -profile:v high -level:v 4.2 -pix_fmt yuv420p \
+              -g 120 -keyint_min 30 \
+              -x264-params "ref=8:bframes=8:aq-mode=2:aq-strength=1.0:psy-rd=1.00,0.15:trellis=2:deblock=-1,-1:threads=0:rc-lookahead=40:me=umh:merange=24:subme=8" \
+              -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv \
+              -sws_flags spline+accurate_rnd \
+              -vf "setpts=N/(60*TB),hqdn3d=1.0:1.0:4:4,scale='if(gt(iw,ih),-2,720)':'if(gt(iw,ih),720,-2)':flags=spline+accurate_rnd+full_chroma_int+full_chroma_inp,colorspace=all=bt709:range=tv" \
+              -c:a libfdk_aac -profile:a aac_he -b:a 64k -af "aresample=async=1000,apad" \
+              -video_track_timescale 60000 -metadata title="TikTok 8Bit Safe Color H264" \
+              -movflags +faststart -shortest -y "$output_path" < /dev/null
+
+            echo "✅ Selesai memproses: $filename"
+          done
+
+      - name: Kumpulkan Hasil ke File ZIP (7-Zip)
+        run: |
+          echo "Membuat file ZIP hasil kompresi..."
+          7z a -tzip Hasil_Kompresi_Videos.zip ./compressed_videos/*
+
+      - name: Upload Artifact ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hasil-Kompresi-Batch-Windows
+          path: Hasil_Kompresi_Videos.zip
+          retention-days: 7
